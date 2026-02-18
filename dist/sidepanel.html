@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>JD Resume Tailor</title>
+    <style>
+      :root {
+        --bg: #f2f4f8;
+        --card: #ffffff;
+        --text: #16202a;
+        --muted: #5d6a78;
+        --accent: #0a7d52;
+        --warn: #9a2f14;
+        --line: #dde3ea;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+        color: var(--text);
+        background: radial-gradient(circle at top right, #e9f7f2 0%, var(--bg) 45%);
+      }
+      .wrap {
+        padding: 12px;
+        display: grid;
+        gap: 10px;
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 10px;
+      }
+      h1 {
+        margin: 0;
+        font-size: 18px;
+      }
+      h2 {
+        margin: 0 0 8px;
+        font-size: 13px;
+        letter-spacing: 0.04em;
+      }
+      p {
+        margin: 6px 0;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+      }
+      .row > * { flex: 1; }
+      input, textarea, button {
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        font: inherit;
+        padding: 8px;
+      }
+      textarea {
+        min-height: 96px;
+        resize: vertical;
+      }
+      button {
+        background: #fff;
+        cursor: pointer;
+      }
+      button.primary {
+        border-color: var(--accent);
+        background: var(--accent);
+        color: white;
+        font-weight: 600;
+      }
+      .status {
+        font-size: 12px;
+        border-radius: 8px;
+        padding: 8px;
+        border: 1px dashed var(--line);
+        background: #f9fbfd;
+      }
+      .warn {
+        color: var(--warn);
+      }
+      .pill {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 999px;
+        background: #e7f4ee;
+        font-size: 12px;
+        margin-right: 6px;
+        margin-bottom: 6px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="card">
+        <h1>JD Resume Tailor</h1>
+        <p>Extract JD from current tab, score against your base resume, and tailor if needed.</p>
+      </div>
+
+      <div class="card">
+        <h2>Job Description</h2>
+        <div class="row">
+          <button id="extractAutoBtn" class="primary">Auto Extract JD</button>
+          <button id="selectJdBtn">Select JD</button>
+        </div>
+        <p>Fallback Select JD lets you click any page element.</p>
+        <textarea id="jdText" placeholder="Job description text"></textarea>
+      </div>
+
+      <div class="card">
+        <h2>Base Resume</h2>
+        <input id="resumeFile" type="file" accept=".pdf,.docx,.txt" />
+        <p id="resumeMeta">No base resume parsed yet.</p>
+      </div>
+
+      <div class="card">
+        <h2>Scoring</h2>
+        <div class="row">
+          <input id="thresholdInput" type="number" min="1" max="100" value="70" />
+          <button id="computeBtn">Compute Match</button>
+        </div>
+        <div id="scoreText" class="status">Score: N/A</div>
+        <div id="missingKeywords"></div>
+      </div>
+
+      <div class="card">
+        <h2>LLM Config</h2>
+        <input id="endpointInput" type="text" placeholder="OpenAI-compatible endpoint (e.g. https://api.openai.com/v1/chat/completions)" />
+        <input id="apiKeyInput" type="password" placeholder="API key (stored locally)" />
+        <input id="modelInput" type="text" placeholder="Model (e.g. gpt-4o-mini)" />
+        <button id="tailorBtn" class="primary">Generate Tailored Resume</button>
+      </div>
+
+      <div class="card">
+        <h2>Tailored Resume</h2>
+        <textarea id="tailoredText" placeholder="Tailored resume text appears here"></textarea>
+        <div class="row">
+          <button id="downloadPdfBtn">Download PDF via LaTeX</button>
+          <input id="latexCompilerInput" type="text" value="https://latexonline.cc/compile" />
+        </div>
+      </div>
+
+      <div id="statusBox" class="status">Ready.</div>
+    </div>
+    <script type="module" src="./sidepanel.js"></script>
+  </body>
+</html>

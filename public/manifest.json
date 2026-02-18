@@ -1,0 +1,38 @@
+{
+  "manifest_version": 3,
+  "name": "JD Resume Tailor Side Panel",
+  "version": "1.0.0",
+  "description": "Extracts JD text, scores resume match, and generates ATS-tailored resumes.",
+  "permissions": [
+    "storage",
+    "scripting",
+    "activeTab",
+    "tabs",
+    "sidePanel",
+    "downloads"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "service_worker.js"
+  },
+  "action": {
+    "default_title": "Open JD Resume Tailor"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "jd_extract.js",
+        "content_script.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}
