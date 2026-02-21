@@ -1,36 +1,140 @@
 import { computeMatch } from './match.js';
-import { parseResumeFile, saveBaseResume, loadBaseResume } from './resume_parse.js';
-import { generateTailoredResume } from './llm.js';
-import { downloadTailoredResumePdf } from './docx_export.js';
+import { generateTailoredResumeStructured, structuredResumeToPlainText } from './llm.js';
+import { downloadTailoredResumePdf, downloadTailoredResumeTex } from './docx_export.js';
+
+const PROVIDERS = {
+  openai: {
+    label: 'OpenAI',
+    endpoint: 'https://api.openai.com/v1/chat/completions',
+    models: ['gpt-4o-mini', 'gpt-4.1-mini', 'gpt-4o']
+  },
+  gemini: {
+    label: 'Gemini',
+    endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
+    models: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash']
+  },
+  perplexity: {
+    label: 'Perplexity',
+    endpoint: 'https://api.perplexity.ai/chat/completions',
+    models: ['sonar', 'sonar-pro', 'sonar-reasoning']
+  }
+};
 
 const els = {
   extractAutoBtn: document.getElementById('extractAutoBtn'),
   selectJdBtn: document.getElementById('selectJdBtn'),
   jdText: document.getElementById('jdText'),
-  resumeFile: document.getElementById('resumeFile'),
+
+  resumeSourceMode: document.getElementById('resumeSourceMode'),
+  latexUploadWrap: document.getElementById('latexUploadWrap'),
+  latexPasteWrap: document.getElementById('latexPasteWrap'),
+  simpleTextWrap: document.getElementById('simpleTextWrap'),
+  resumeLatexFile: document.getElementById('resumeLatexFile'),
+  resumeLatexText: document.getElementById('resumeLatexText'),
+  resumeSimpleText: document.getElementById('resumeSimpleText'),
+  prepareResumeBtn: document.getElementById('prepareResumeBtn'),
   resumeMeta: document.getElementById('resumeMeta'),
+
   thresholdInput: document.getElementById('thresholdInput'),
   computeBtn: document.getElementById('computeBtn'),
   scoreText: document.getElementById('scoreText'),
   missingKeywords: document.getElementById('missingKeywords'),
+
+  providerSelect: document.getElementById('providerSelect'),
+  modelSelect: document.getElementById('modelSelect'),
+  customModelInput: document.getElementById('customModelInput'),
   endpointInput: document.getElementById('endpointInput'),
   apiKeyInput: document.getElementById('apiKeyInput'),
-  modelInput: document.getElementById('modelInput'),
   tailorBtn: document.getElementById('tailorBtn'),
+
   tailoredText: document.getElementById('tailoredText'),
-  downloadPdfBtn: document.getElementById('downloadPdfBtn'),
+  latexTemplateFile: document.getElementById('latexTemplateFile'),
+  latexTemplateText: document.getElementById('latexTemplateText'),
   latexCompilerInput: document.getElementById('latexCompilerInput'),
+  downloadPdfBtn: document.getElementById('downloadPdfBtn'),
+  downloadTexBtn: document.getElementById('downloadTexBtn'),
   statusBox: document.getElementById('statusBox')
 };
 
+function defaultProfiles() {
+  return {
+    openai: {
+      endpoint: PROVIDERS.openai.endpoint,
+      apiKey: '',
+      model: PROVIDERS.openai.models[0],
+      customModel: ''
+    },
+    gemini: {
+      endpoint: PROVIDERS.gemini.endpoint,
+      apiKey: '',
+      model: PROVIDERS.gemini.models[0],
+      customModel: ''
+    },
+    perplexity: {
+      endpoint: PROVIDERS.perplexity.endpoint,
+      apiKey: '',
+      model: PROVIDERS.perplexity.models[0],
+      customModel: ''
+    }
+  };
+}
+
 const state = {
+  selectedProvider: 'openai',
+  llmProfiles: defaultProfiles(),
   baseResumeText: '',
+  identityHints: [],
+  generatedStructuredResume: null,
   latestScore: null
 };
 
 function setStatus(message, isError = false) {
   els.statusBox.textContent = message;
   els.statusBox.classList.toggle('warn', isError);
+}
+
+function normalizeText(text) {
+  return (text || '')
+    .replace(/\u00a0/g, ' ')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/[ \t]*\n[ \t]*/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function latexToPlainText(latex) {
+  let text = latex || '';
+  text = text.replace(/%.*$/gm, '');
+  text = text.replace(/\\href\{([^}]*)\}\{([^}]*)\}/g, '$2 $1');
+  text = text.replace(/\\resumeItem\{([^}]*)\}/g, '\n- $1');
+  text = text.replace(/\\textbf\{([^}]*)\}/g, '$1');
+  text = text.replace(/\\textit\{([^}]*)\}/g, '$1');
+  text = text.replace(/\\textcolor\{[^}]*\}\{([^}]*)\}/g, '$1');
+  text = text.replace(/\\resumeSubheading\s*\{([^}]*)\}\{([^}]*)\}\{([^}]*)\}\{([^}]*)\}/g, '\n$1 | $2\n$3 | $4\n');
+  text = text.replace(/\\resumeProjectHeading\s*\{([^}]*)\}\{([^}]*)\}\{([^}]*)\}/g, '\n$1 | $2 | $3\n');
+  text = text.replace(/\\[a-zA-Z*]+(\[[^\]]*\])?/g, ' ');
+  text = text.replace(/[{}]/g, ' ');
+  text = text.replace(/\\\\/g, '\n');
+  return normalizeText(text);
+}
+
+function extractIdentityHints(text) {
+  const lines = normalizeText(text).split('\n').filter(Boolean).slice(0, 15);
+  const hints = [];
+
+  const email = (text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i) || [])[0] || '';
+  const phone = (text.match(/\+?\d[\d\s().-]{7,}/) || [])[0] || '';
+  const linkedin = (text.match(/(?:https?:\/\/)?(?:www\.)?linkedin\.com\/[^\s|]+/i) || [])[0] || '';
+  const github = (text.match(/(?:https?:\/\/)?(?:www\.)?github\.com\/[^\s|]+/i) || [])[0] || '';
+
+  for (const line of lines) {
+    hints.push(line);
+  }
+  for (const value of [email, phone, linkedin, github]) {
+    if (value) hints.push(value);
+  }
+
+  return [...new Set(hints.filter(Boolean))].slice(0, 20);
 }
 
 function renderMissingKeywords(items) {
@@ -45,30 +149,174 @@ function renderMissingKeywords(items) {
   }
 }
 
+function updateResumeSourceVisibility() {
+  const mode = els.resumeSourceMode.value;
+  els.latexUploadWrap.classList.toggle('hidden', mode !== 'latex_upload');
+  els.latexPasteWrap.classList.toggle('hidden', mode === 'simple_text');
+  els.simpleTextWrap.classList.toggle('hidden', mode !== 'simple_text');
+}
+
+function getPreparedResumeText() {
+  const mode = els.resumeSourceMode.value;
+  if (mode === 'simple_text') {
+    const text = normalizeText(els.resumeSimpleText.value);
+    if (!text) throw new Error('Enter simple resume text first');
+    return text;
+  }
+
+  const latex = (els.resumeLatexText.value || '').trim();
+  if (!latex) throw new Error('Provide LaTeX resume code first');
+  const parsed = latexToPlainText(latex);
+  if (!parsed) throw new Error('Unable to parse text from LaTeX source');
+  return parsed;
+}
+
+async function getPersistent(keys) {
+  const [local, sync] = await Promise.all([
+    chrome.storage.local.get(keys),
+    chrome.storage.sync.get(keys).catch(() => ({}))
+  ]);
+  const merged = { ...local };
+  for (const key of keys) {
+    if (typeof merged[key] === 'undefined' && typeof sync[key] !== 'undefined') {
+      merged[key] = sync[key];
+    }
+  }
+  return merged;
+}
+
+async function setPersistent(items) {
+  await chrome.storage.local.set(items);
+  try {
+    await chrome.storage.sync.set(items);
+  } catch (_err) {
+    // Ignore sync failures; local write is enough.
+  }
+}
+
+function normalizeProfiles(rawProfiles) {
+  const base = defaultProfiles();
+  if (!rawProfiles || typeof rawProfiles !== 'object') return base;
+
+  for (const providerId of Object.keys(PROVIDERS)) {
+    const raw = rawProfiles[providerId] || {};
+    const model = typeof raw.model === 'string' && raw.model
+      ? raw.model
+      : base[providerId].model;
+
+    base[providerId] = {
+      endpoint: typeof raw.endpoint === 'string' && raw.endpoint.trim()
+        ? raw.endpoint.trim()
+        : base[providerId].endpoint,
+      apiKey: typeof raw.apiKey === 'string' ? raw.apiKey : '',
+      model: PROVIDERS[providerId].models.includes(model) ? model : base[providerId].model,
+      customModel: typeof raw.customModel === 'string' ? raw.customModel.trim() : ''
+    };
+  }
+
+  return base;
+}
+
+function renderProviderControls(providerId) {
+  const profile = state.llmProfiles[providerId];
+  const provider = PROVIDERS[providerId];
+
+  els.providerSelect.value = providerId;
+  els.modelSelect.innerHTML = '';
+
+  for (const model of provider.models) {
+    const option = document.createElement('option');
+    option.value = model;
+    option.textContent = model;
+    els.modelSelect.appendChild(option);
+  }
+
+  els.modelSelect.value = provider.models.includes(profile.model)
+    ? profile.model
+    : provider.models[0];
+  els.customModelInput.value = profile.customModel || '';
+  els.endpointInput.value = profile.endpoint || provider.endpoint;
+  els.apiKeyInput.value = profile.apiKey || '';
+}
+
+function updateProfileFromInputs(providerId = els.providerSelect.value) {
+  const profile = state.llmProfiles[providerId];
+  if (!profile) return;
+
+  profile.endpoint = els.endpointInput.value.trim() || PROVIDERS[providerId].endpoint;
+  profile.apiKey = els.apiKeyInput.value;
+  profile.model = els.modelSelect.value || PROVIDERS[providerId].models[0];
+  profile.customModel = els.customModelInput.value.trim();
+}
+
+function getActiveLlmConfig() {
+  const providerId = els.providerSelect.value;
+  const profile = state.llmProfiles[providerId];
+  const model = els.customModelInput.value.trim() || els.modelSelect.value || profile.model;
+  return {
+    providerId,
+    endpoint: els.endpointInput.value.trim() || profile.endpoint,
+    apiKey: els.apiKeyInput.value,
+    model
+  };
+}
+
 async function saveSettings() {
-  await chrome.storage.local.set({
+  updateProfileFromInputs(els.providerSelect.value);
+  state.selectedProvider = els.providerSelect.value;
+
+  await setPersistent({
     threshold: Number(els.thresholdInput.value || 70),
-    llmEndpoint: els.endpointInput.value.trim(),
-    llmApiKey: els.apiKeyInput.value,
-    llmModel: els.modelInput.value.trim(),
-    latexCompilerUrl: els.latexCompilerInput.value.trim()
+    selectedProvider: els.providerSelect.value,
+    llmProfiles: state.llmProfiles,
+    resumeSourceMode: els.resumeSourceMode.value,
+    resumeLatexText: els.resumeLatexText.value,
+    resumeSimpleText: els.resumeSimpleText.value,
+    preparedResumeText: state.baseResumeText,
+    identityHints: state.identityHints,
+    latexTemplateText: els.latexTemplateText.value,
+    latexCompilerUrl: els.latexCompilerInput.value.trim(),
+    tailoredResumeText: els.tailoredText.value,
+    tailoredStructuredResume: state.generatedStructuredResume
   });
 }
 
 async function loadSettings() {
-  const data = await chrome.storage.local.get([
+  const data = await getPersistent([
     'threshold',
-    'llmEndpoint',
-    'llmApiKey',
-    'llmModel',
-    'latexCompilerUrl'
+    'selectedProvider',
+    'llmProfiles',
+    'resumeSourceMode',
+    'resumeLatexText',
+    'resumeSimpleText',
+    'preparedResumeText',
+    'identityHints',
+    'latexTemplateText',
+    'latexCompilerUrl',
+    'tailoredResumeText',
+    'tailoredStructuredResume'
   ]);
 
   if (typeof data.threshold === 'number') els.thresholdInput.value = String(data.threshold);
-  if (data.llmEndpoint) els.endpointInput.value = data.llmEndpoint;
-  if (data.llmApiKey) els.apiKeyInput.value = data.llmApiKey;
-  if (data.llmModel) els.modelInput.value = data.llmModel;
+  if (data.resumeSourceMode) els.resumeSourceMode.value = data.resumeSourceMode;
+  if (data.resumeLatexText) els.resumeLatexText.value = data.resumeLatexText;
+  if (data.resumeSimpleText) els.resumeSimpleText.value = data.resumeSimpleText;
+  if (data.latexTemplateText) els.latexTemplateText.value = data.latexTemplateText;
   if (data.latexCompilerUrl) els.latexCompilerInput.value = data.latexCompilerUrl;
+  if (data.tailoredResumeText) els.tailoredText.value = data.tailoredResumeText;
+
+  state.baseResumeText = data.preparedResumeText || '';
+  state.identityHints = Array.isArray(data.identityHints) ? data.identityHints : [];
+  state.generatedStructuredResume = data.tailoredStructuredResume || null;
+
+  state.llmProfiles = normalizeProfiles(data.llmProfiles);
+  state.selectedProvider = PROVIDERS[data.selectedProvider] ? data.selectedProvider : 'openai';
+  renderProviderControls(state.selectedProvider);
+  updateResumeSourceVisibility();
+
+  if (state.baseResumeText) {
+    els.resumeMeta.textContent = `Prepared resume loaded (${state.baseResumeText.length} chars).`;
+  }
 }
 
 async function sendToServiceWorker(type) {
@@ -76,80 +324,106 @@ async function sendToServiceWorker(type) {
 }
 
 async function handleExtract(type) {
-  setStatus(type === 'EXTRACT_JD_AUTO' ? 'Extracting JD from active tab...' : 'Select mode enabled. Click target content on page.');
-
+  setStatus(type === 'EXTRACT_JD_AUTO' ? 'Extracting JD from active tab...' : 'Select mode enabled. Click target JD content in page.');
   const response = await sendToServiceWorker(type);
-  if (!response?.ok) {
-    throw new Error(response?.error || 'Extraction failed');
-  }
+  if (!response?.ok) throw new Error(response?.error || 'JD extraction failed');
 
   els.jdText.value = response.text || '';
-  setStatus(`JD captured (${response.meta?.mode || 'unknown'} mode).`);
+  setStatus(`JD captured (${response.meta?.strategy || response.meta?.mode || 'auto'}).`);
 }
 
 function runMatch() {
-  const jdText = els.jdText.value.trim();
+  const jdText = normalizeText(els.jdText.value);
   if (!jdText) throw new Error('JD text is empty');
-  if (!state.baseResumeText) throw new Error('Base resume text is missing. Upload and parse resume first.');
+  if (!state.baseResumeText) throw new Error('Prepare resume source first');
 
   const result = computeMatch(jdText, state.baseResumeText);
   state.latestScore = result.score;
 
-  els.scoreText.textContent = `Score: ${result.score}/100 | Overlap terms: ${result.stats.overlapTerms}`;
-  renderMissingKeywords(result.missingTopKeywords);
+  const requiredCoverage = typeof result.stats.requiredCoverage === 'number'
+    ? ` | Required coverage: ${result.stats.requiredCoverage}%`
+    : '';
 
+  els.scoreText.textContent = `Score: ${result.score}/100 | Overlap terms: ${result.stats.overlapTerms}${requiredCoverage}`;
+  renderMissingKeywords(result.missingRequiredKeywords?.length ? result.missingRequiredKeywords : result.missingTopKeywords);
   return result;
 }
 
-async function maybeTailorResume() {
-  const threshold = Number(els.thresholdInput.value || 70);
-  const endpoint = els.endpointInput.value.trim();
-  const apiKey = els.apiKeyInput.value;
-  const model = els.modelInput.value.trim();
-  const jdText = els.jdText.value.trim();
+async function prepareResumeSource() {
+  const preparedText = getPreparedResumeText();
+  state.baseResumeText = preparedText;
+  state.identityHints = extractIdentityHints(preparedText);
+  els.resumeMeta.textContent = `Prepared resume source (${preparedText.length} chars).`;
+  await saveSettings();
+  setStatus('Resume source prepared for matching and tailoring.');
+}
 
-  if (!endpoint || !model) throw new Error('LLM endpoint and model are required');
+async function generateTailoredResume() {
+  const jdText = normalizeText(els.jdText.value);
   if (!jdText) throw new Error('JD text is empty');
-  if (!state.baseResumeText) throw new Error('Base resume is not available');
+  if (!state.baseResumeText) throw new Error('Prepare resume source first');
+
+  const { providerId, endpoint, apiKey, model } = getActiveLlmConfig();
+  if (!endpoint || !model) throw new Error('LLM endpoint and model are required');
+  if (!apiKey) throw new Error(`API key is required for ${PROVIDERS[providerId].label}`);
 
   const matchResult = runMatch();
-  if (matchResult.score >= threshold) {
-    setStatus(`Score ${matchResult.score} >= threshold ${threshold}. Tailoring optional; generating anyway.`);
-  } else {
-    setStatus(`Score ${matchResult.score} < threshold ${threshold}. Generating tailored resume...`);
-  }
-
   await saveSettings();
+  setStatus(`Generating tailored resume with ${PROVIDERS[providerId].label}...`);
 
-  const text = await generateTailoredResume({
+  const structured = await generateTailoredResumeStructured({
     endpoint,
     apiKey,
     model,
     jdText,
     baseResumeText: state.baseResumeText,
+    matchInsights: {
+      score: matchResult.score,
+      missingTopKeywords: matchResult.missingTopKeywords,
+      missingRequiredKeywords: matchResult.missingRequiredKeywords
+    },
+    identityHints: state.identityHints,
     temperature: 0.2
   });
 
-  els.tailoredText.value = text;
-  await chrome.storage.local.set({ tailoredResumeText: text, tailoredResumeUpdatedAt: Date.now() });
-  setStatus('Tailored resume generated.');
+  state.generatedStructuredResume = structured;
+  els.tailoredText.value = structuredResumeToPlainText(structured);
+  await saveSettings();
+  setStatus('Tailored resume generated. Download PDF when ready.');
+}
+
+async function downloadPdf() {
+  if (!state.generatedStructuredResume) {
+    throw new Error('Generate tailored resume first');
+  }
+
+  await saveSettings();
+  setStatus('Compiling LaTeX to PDF...');
+  await downloadTailoredResumePdf({
+    structuredResume: state.generatedStructuredResume,
+    filename: 'tailored_resume.pdf',
+    compilerUrl: els.latexCompilerInput.value.trim() || 'https://latexonline.cc/compile',
+    customTemplate: els.latexTemplateText.value.trim()
+  });
+  setStatus('PDF download started.');
+}
+
+async function downloadTex() {
+  if (!state.generatedStructuredResume) {
+    throw new Error('Generate tailored resume first');
+  }
+
+  await saveSettings();
+  await downloadTailoredResumeTex({
+    structuredResume: state.generatedStructuredResume,
+    filename: 'tailored_resume.tex',
+    customTemplate: els.latexTemplateText.value.trim()
+  });
+  setStatus('.tex download started.');
 }
 
 async function init() {
   await loadSettings();
-
-  const resume = await loadBaseResume();
-  if (resume.text) {
-    state.baseResumeText = resume.text;
-    const updated = resume.updatedAt ? new Date(resume.updatedAt).toLocaleString() : 'unknown';
-    els.resumeMeta.textContent = `Base resume loaded from storage (${resume.text.length} chars). Updated: ${updated}`;
-  }
-
-  const storedTailored = await chrome.storage.local.get(['tailoredResumeText']);
-  if (storedTailored.tailoredResumeText) {
-    els.tailoredText.value = storedTailored.tailoredResumeText;
-  }
-
   setStatus('Ready.');
 }
 
@@ -169,19 +443,31 @@ els.selectJdBtn.addEventListener('click', async () => {
   }
 });
 
-els.resumeFile.addEventListener('change', async (event) => {
+els.resumeSourceMode.addEventListener('change', () => {
+  updateResumeSourceVisibility();
+  saveSettings().catch((err) => setStatus(err.message || String(err), true));
+});
+
+els.resumeLatexFile.addEventListener('change', async (event) => {
   try {
     const file = event.target.files?.[0];
     if (!file) return;
+    const text = await file.text();
+    els.resumeLatexText.value = text;
+    if (els.resumeSourceMode.value !== 'latex_upload') {
+      els.resumeSourceMode.value = 'latex_upload';
+      updateResumeSourceVisibility();
+    }
+    await saveSettings();
+    setStatus(`Loaded LaTeX resume file: ${file.name}`);
+  } catch (err) {
+    setStatus(err.message || String(err), true);
+  }
+});
 
-    setStatus(`Parsing ${file.name}...`);
-    const parsed = await parseResumeFile(file);
-    if (!parsed) throw new Error('Parsed resume text is empty');
-
-    state.baseResumeText = parsed;
-    await saveBaseResume(parsed);
-    els.resumeMeta.textContent = `Parsed and stored (${parsed.length} chars) from ${file.name}`;
-    setStatus('Base resume parsed and saved to chrome.storage.local');
+els.prepareResumeBtn.addEventListener('click', async () => {
+  try {
+    await prepareResumeSource();
   } catch (err) {
     setStatus(err.message || String(err), true);
   }
@@ -189,17 +475,44 @@ els.resumeFile.addEventListener('change', async (event) => {
 
 els.computeBtn.addEventListener('click', async () => {
   try {
-    await saveSettings();
     const result = runMatch();
+    await saveSettings();
     setStatus(`Match computed: ${result.score}/100`);
   } catch (err) {
     setStatus(err.message || String(err), true);
   }
 });
 
+els.providerSelect.addEventListener('change', async () => {
+  try {
+    updateProfileFromInputs(state.selectedProvider);
+    state.selectedProvider = els.providerSelect.value;
+    renderProviderControls(state.selectedProvider);
+    await saveSettings();
+  } catch (err) {
+    setStatus(err.message || String(err), true);
+  }
+});
+
+for (const input of [
+  els.modelSelect,
+  els.customModelInput,
+  els.endpointInput,
+  els.apiKeyInput,
+  els.thresholdInput,
+  els.resumeLatexText,
+  els.resumeSimpleText,
+  els.latexCompilerInput,
+  els.latexTemplateText
+]) {
+  input.addEventListener('change', () => {
+    saveSettings().catch((err) => setStatus(err.message || String(err), true));
+  });
+}
+
 els.tailorBtn.addEventListener('click', async () => {
   try {
-    await maybeTailorResume();
+    await generateTailoredResume();
   } catch (err) {
     setStatus(err.message || String(err), true);
   }
@@ -207,24 +520,30 @@ els.tailorBtn.addEventListener('click', async () => {
 
 els.downloadPdfBtn.addEventListener('click', async () => {
   try {
-    const text = els.tailoredText.value.trim();
-    if (!text) throw new Error('No tailored resume text to export');
-
-    const compilerUrl = els.latexCompilerInput.value.trim() || 'https://latexonline.cc/compile';
-    await saveSettings();
-    setStatus('Compiling LaTeX to PDF...');
-
-    await downloadTailoredResumePdf(text, 'tailored_resume.pdf', compilerUrl);
-    setStatus('PDF download started.');
+    await downloadPdf();
   } catch (err) {
     setStatus(err.message || String(err), true);
   }
 });
 
-for (const input of [els.thresholdInput, els.endpointInput, els.apiKeyInput, els.modelInput, els.latexCompilerInput]) {
-  input.addEventListener('change', () => {
-    saveSettings().catch((err) => setStatus(err.message || String(err), true));
-  });
-}
+els.downloadTexBtn.addEventListener('click', async () => {
+  try {
+    await downloadTex();
+  } catch (err) {
+    setStatus(err.message || String(err), true);
+  }
+});
+
+els.latexTemplateFile.addEventListener('change', async (event) => {
+  try {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    els.latexTemplateText.value = await file.text();
+    await saveSettings();
+    setStatus(`Loaded custom template: ${file.name}`);
+  } catch (err) {
+    setStatus(err.message || String(err), true);
+  }
+});
 
 init().catch((err) => setStatus(err.message || String(err), true));

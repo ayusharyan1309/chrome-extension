@@ -51,7 +51,10 @@
         gap: 8px;
       }
       .row > * { flex: 1; }
-      input, textarea, button {
+      select,
+      input,
+      textarea,
+      button {
         width: 100%;
         border: 1px solid var(--line);
         border-radius: 8px;
@@ -91,33 +94,56 @@
         margin-right: 6px;
         margin-bottom: 6px;
       }
+      .hidden {
+        display: none;
+      }
+      .small {
+        font-size: 11px;
+      }
     </style>
   </head>
   <body>
     <div class="wrap">
       <div class="card">
         <h1>JD Resume Tailor</h1>
-        <p>Extract JD from current tab, score against your base resume, and tailor if needed.</p>
+        <p>Extract JD, choose resume source, compute match, generate and download final PDF in LaTeX layout.</p>
       </div>
 
       <div class="card">
         <h2>Job Description</h2>
         <div class="row">
           <button id="extractAutoBtn" class="primary">Auto Extract JD</button>
-          <button id="selectJdBtn">Select JD</button>
+          <button id="selectJdBtn">Select JD Manually</button>
         </div>
-        <p>Fallback Select JD lets you click any page element.</p>
         <textarea id="jdText" placeholder="Job description text"></textarea>
       </div>
 
       <div class="card">
-        <h2>Base Resume</h2>
-        <input id="resumeFile" type="file" accept=".pdf,.docx,.txt" />
-        <p id="resumeMeta">No base resume parsed yet.</p>
+        <h2>Resume Source</h2>
+        <select id="resumeSourceMode">
+          <option value="latex_upload">Upload LaTeX Resume (.tex)</option>
+          <option value="latex_paste">Paste LaTeX Resume Code</option>
+          <option value="simple_text">Enter Simple Resume Text</option>
+        </select>
+
+        <div id="latexUploadWrap">
+          <input id="resumeLatexFile" type="file" accept=".tex,text/x-tex,text/plain" />
+        </div>
+
+        <div id="latexPasteWrap" class="hidden">
+          <textarea id="resumeLatexText" placeholder="Paste your resume LaTeX code"></textarea>
+        </div>
+
+        <div id="simpleTextWrap" class="hidden">
+          <textarea id="resumeSimpleText" placeholder="Enter your resume information in plain text"></textarea>
+        </div>
+
+        <button id="prepareResumeBtn" class="primary">Use This Resume Source</button>
+        <p id="resumeMeta">Resume source not prepared yet.</p>
       </div>
 
       <div class="card">
-        <h2>Scoring</h2>
+        <h2>Match Scoring</h2>
         <div class="row">
           <input id="thresholdInput" type="number" min="1" max="100" value="70" />
           <button id="computeBtn">Compute Match</button>
@@ -128,18 +154,33 @@
 
       <div class="card">
         <h2>LLM Config</h2>
-        <input id="endpointInput" type="text" placeholder="OpenAI-compatible endpoint (e.g. https://api.openai.com/v1/chat/completions)" />
-        <input id="apiKeyInput" type="password" placeholder="API key (stored locally)" />
-        <input id="modelInput" type="text" placeholder="Model (e.g. gpt-4o-mini)" />
+        <div class="row">
+          <select id="providerSelect">
+            <option value="openai">OpenAI</option>
+            <option value="gemini">Gemini</option>
+            <option value="perplexity">Perplexity</option>
+          </select>
+          <select id="modelSelect"></select>
+        </div>
+        <input id="customModelInput" type="text" placeholder="Optional custom model override" />
+        <input id="endpointInput" type="text" placeholder="OpenAI-compatible endpoint URL" />
+        <input id="apiKeyInput" type="password" placeholder="Provider API key (saved per provider)" />
         <button id="tailorBtn" class="primary">Generate Tailored Resume</button>
+        <p class="small">Keys/config are saved in local + sync storage where Chrome sync is available.</p>
       </div>
 
       <div class="card">
-        <h2>Tailored Resume</h2>
-        <textarea id="tailoredText" placeholder="Tailored resume text appears here"></textarea>
+        <h2>Output</h2>
+        <textarea id="tailoredText" placeholder="Generated resume preview"></textarea>
+
+        <h2 style="margin-top:10px;">Optional Custom LaTeX Template</h2>
+        <input id="latexTemplateFile" type="file" accept=".tex,text/x-tex,text/plain" />
+        <textarea id="latexTemplateText" placeholder="Optional template with placeholders: {{NAME}}, {{CONTACT}}, {{SUMMARY}}, {{SKILLS_BLOCK}}, {{EXPERIENCE_BLOCK}}, {{PROJECTS_BLOCK}}, {{EDUCATION_BLOCK}}"></textarea>
+
+        <input id="latexCompilerInput" type="text" value="https://latexonline.cc/compile" />
         <div class="row">
-          <button id="downloadPdfBtn">Download PDF via LaTeX</button>
-          <input id="latexCompilerInput" type="text" value="https://latexonline.cc/compile" />
+          <button id="downloadPdfBtn" class="primary">Download Final PDF</button>
+          <button id="downloadTexBtn">Download .tex</button>
         </div>
       </div>
 

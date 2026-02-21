@@ -3,6 +3,8 @@
   window.__jdContentScriptLoaded = true;
 
   let selectionInProgress = false;
+  const AUTO_RETRY_DELAY_MS = 600;
+  const AUTO_RETRY_ATTEMPTS = 4;
 
   function createOverlay() {
     const overlay = document.createElement('div');
@@ -90,9 +92,20 @@
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     (async () => {
       if (message?.type === 'EXTRACT_JD_AUTO') {
-        const result = window.__jdExtract?.extractFromPage
-          ? window.__jdExtract.extractFromPage()
-          : { ok: false, error: 'Extractor not initialized' };
+        if (!window.__jdExtract?.extractFromPage) {
+          sendResponse({ ok: false, error: 'Extractor not initialized' });
+          return;
+        }
+
+        let result = { ok: false, error: 'Unknown extraction error' };
+        for (let attempt = 1; attempt <= AUTO_RETRY_ATTEMPTS; attempt += 1) {
+          result = window.__jdExtract.extractFromPage();
+          if (result?.ok) break;
+
+          await new Promise((resolve) => setTimeout(resolve, AUTO_RETRY_DELAY_MS));
+          window.__jdExtract.clickButtonsByText?.(['show more', 'see more', 'more']);
+        }
+
         sendResponse(result);
         return;
       }
