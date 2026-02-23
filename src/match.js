@@ -2,26 +2,77 @@ const STOP_WORDS = new Set([
   'the', 'and', 'for', 'with', 'from', 'that', 'this', 'you', 'your', 'are', 'was', 'were',
   'have', 'has', 'had', 'will', 'can', 'our', 'about', 'into', 'their', 'they', 'them', 'but',
   'not', 'all', 'any', 'its', 'per', 'who', 'how', 'what', 'when', 'where', 'why', 'job', 'role',
-  'team', 'work', 'works', 'working', 'candidate', 'including', 'using', 'build', 'built'
+  'team', 'work', 'works', 'working', 'candidate', 'including', 'using', 'build', 'built',
+  'we', 'us', 'i', 'me', 'my', 'mine', 'ours', 'he', 'she', 'it', 'as', 'at', 'by', 'on', 'of',
+  'to', 'in', 'is', 'be', 'an', 'a', 'or', 'if', 'then', 'than', 'also', 'should', 'must',
+  'responsible', 'responsibilities', 'qualification', 'qualifications', 'experience', 'years'
 ]);
 
-const SKILL_KEYWORDS = new Set([
-  'javascript', 'typescript', 'python', 'java', 'go', 'react', 'angular', 'vue', 'node', 'nodejs',
-  'sql', 'postgres', 'mysql', 'mongodb', 'redis', 'aws', 'gcp', 'azure', 'docker', 'kubernetes',
-  'terraform', 'graphql', 'rest', 'microservices', 'ci', 'cd', 'git', 'linux', 'security',
-  'testing', 'pytest', 'jest', 'cypress', 'playwright', 'html', 'css', 'sass', 'webpack', 'vite'
-]);
-
-const REQUIRED_MARKERS = ['required', 'must have', 'minimum qualifications', 'basic qualifications'];
+const REQUIRED_MARKERS = ['required', 'must have', 'minimum qualifications', 'basic qualifications', 'what you bring'];
 const PREFERRED_MARKERS = ['preferred', 'nice to have', 'bonus', 'good to have'];
+
+const SKILL_VOCAB = {
+  java: ['java'],
+  python: ['python'],
+  javascript: ['javascript', 'js'],
+  typescript: ['typescript', 'ts'],
+  sql: ['sql'],
+  react: ['react', 'reactjs', 'react.js'],
+  nodejs: ['nodejs', 'node.js', 'node'],
+  spring_boot: ['spring boot'],
+  kafka: ['kafka', 'apache kafka'],
+  redis: ['redis'],
+  graphql: ['graphql'],
+  rest_api: ['rest api', 'rest apis', 'restful api', 'restful apis'],
+  microservices: ['microservices', 'microservice'],
+  aws: ['aws', 'amazon web services'],
+  gcp: ['gcp', 'google cloud'],
+  azure: ['azure'],
+  docker: ['docker'],
+  kubernetes: ['kubernetes', 'k8s'],
+  spark: ['spark', 'spark streaming'],
+  flink: ['flink', 'apache flink'],
+  bigquery: ['bigquery'],
+  snowflake: ['snowflake'],
+  redshift: ['redshift', 'aws redshift'],
+  clickhouse: ['clickhouse'],
+  s3: ['s3', 'amazon s3'],
+  sftp: ['sftp'],
+  mysql: ['mysql'],
+  postgres: ['postgres', 'postgresql'],
+  mongodb: ['mongodb', 'mongo'],
+  git: ['git']
+};
 
 function normalizeText(text) {
   return (text || '').toLowerCase().replace(/\u00a0/g, ' ');
 }
 
+function escapeRegex(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function containsPhrase(text, phrase) {
+  const pattern = new RegExp(`(^|[^a-z0-9])${escapeRegex(phrase)}([^a-z0-9]|$)`, 'i');
+  return pattern.test(text);
+}
+
+function extractSkillSet(text) {
+  const lower = normalizeText(text);
+  const found = new Set();
+
+  for (const [canonical, aliases] of Object.entries(SKILL_VOCAB)) {
+    if (aliases.some((alias) => containsPhrase(lower, alias))) {
+      found.add(canonical);
+    }
+  }
+
+  return found;
+}
+
 function tokenize(text) {
   return normalizeText(text)
-    .replace(/[^a-z0-9+#.\-\s]/g, ' ')
+    .replace(/[^a-z0-9+#.\-/\s]/g, ' ')
     .split(/\s+/)
     .map((t) => t.trim())
     .filter((t) => t.length > 1 && !STOP_WORDS.has(t));
@@ -29,9 +80,7 @@ function tokenize(text) {
 
 function frequencyMap(tokens) {
   const map = new Map();
-  for (const token of tokens) {
-    map.set(token, (map.get(token) || 0) + 1);
-  }
+  for (const token of tokens) map.set(token, (map.get(token) || 0) + 1);
   return map;
 }
 
@@ -67,134 +116,131 @@ function splitJdZones(jdText) {
   };
 }
 
-function extractPhrases(tokens, minFreq = 2) {
-  const phraseFreq = new Map();
-
-  for (let i = 0; i < tokens.length - 1; i += 1) {
-    const bi = `${tokens[i]} ${tokens[i + 1]}`;
-    phraseFreq.set(bi, (phraseFreq.get(bi) || 0) + 1);
-
-    if (i < tokens.length - 2) {
-      const tri = `${tokens[i]} ${tokens[i + 1]} ${tokens[i + 2]}`;
-      phraseFreq.set(tri, (phraseFreq.get(tri) || 0) + 1);
-    }
+function weightedCoverage(weightItems, hasItem) {
+  let total = 0;
+  let hit = 0;
+  for (const item of weightItems) {
+    total += item.weight;
+    if (hasItem(item.key)) hit += item.weight;
   }
-
-  const out = [];
-  for (const [phrase, freq] of phraseFreq.entries()) {
-    if (freq >= minFreq && phrase.length <= 48) {
-      out.push({ phrase, freq });
-    }
-  }
-
-  out.sort((a, b) => b.freq - a.freq || b.phrase.length - a.phrase.length);
-  return out.slice(0, 40);
+  return total > 0 ? (hit / total) * 100 : null;
 }
 
-function containsPhrase(text, phrase) {
-  return normalizeText(text).includes(phrase);
-}
-
-function scoreTokenBucket({ jdFreq, resumeFreq, zoneWeight, zoneName, missing, matched }) {
-  let totalWeight = 0;
-  let matchedWeight = 0;
-
-  for (const [term, freq] of jdFreq.entries()) {
-    let weight = zoneWeight * (1 + Math.log1p(freq));
-    if (SKILL_KEYWORDS.has(term)) weight += zoneWeight * 1.6;
-    if (freq > 2) weight += zoneWeight * 0.4;
-
-    totalWeight += weight;
-
-    if (resumeFreq.has(term)) {
-      const resumeBoost = Math.min(Math.log1p(resumeFreq.get(term)), 1);
-      matchedWeight += weight + resumeBoost;
-      matched.push({ term, zone: zoneName, weight });
-    } else {
-      missing.push({ term, zone: zoneName, weight, freq });
-    }
-  }
-
-  return { totalWeight, matchedWeight };
+function round0(value) {
+  return Math.round(value);
 }
 
 export function computeMatch(jdText, resumeText) {
   const zones = splitJdZones(jdText);
+  const resumeLower = normalizeText(resumeText);
 
-  const resumeTokens = tokenize(resumeText);
-  const resumeFreq = frequencyMap(resumeTokens);
+  const jdAllSkills = extractSkillSet(jdText);
+  const jdRequiredSkills = extractSkillSet(zones.requiredText);
+  const jdPreferredSkills = extractSkillSet(zones.preferredText);
+  const resumeSkills = extractSkillSet(resumeText);
 
-  const requiredTokens = tokenize(zones.requiredText);
-  const preferredTokens = tokenize(zones.preferredText);
-  const generalTokens = tokenize(zones.generalText || jdText);
-
-  const requiredFreq = frequencyMap(requiredTokens);
-  const preferredFreq = frequencyMap(preferredTokens);
-  const generalFreq = frequencyMap(generalTokens);
-
-  const missing = [];
-  const matched = [];
-
-  const requiredScore = scoreTokenBucket({
-    jdFreq: requiredFreq,
-    resumeFreq,
-    zoneWeight: 2.5,
-    zoneName: 'required',
-    missing,
-    matched
-  });
-
-  const preferredScore = scoreTokenBucket({
-    jdFreq: preferredFreq,
-    resumeFreq,
-    zoneWeight: 1.4,
-    zoneName: 'preferred',
-    missing,
-    matched
-  });
-
-  const generalScore = scoreTokenBucket({
-    jdFreq: generalFreq,
-    resumeFreq,
-    zoneWeight: 1,
-    zoneName: 'general',
-    missing,
-    matched
-  });
-
-  const jdPhrases = extractPhrases(tokenize(jdText));
-  let phraseTotalWeight = 0;
-  let phraseMatchedWeight = 0;
-
-  for (const item of jdPhrases) {
-    const phraseWeight = Math.min(1.5 + item.freq * 0.5, 4);
-    phraseTotalWeight += phraseWeight;
-    if (containsPhrase(resumeText, item.phrase)) {
-      phraseMatchedWeight += phraseWeight;
-    }
+  // Skill-first weighting
+  const skillWeightItems = [];
+  for (const skill of jdAllSkills) {
+    let weight = 2.5;
+    if (jdRequiredSkills.has(skill)) weight += 2.2;
+    else if (jdPreferredSkills.has(skill)) weight += 0.8;
+    skillWeightItems.push({ key: skill, weight });
   }
 
-  const totalWeight = requiredScore.totalWeight + preferredScore.totalWeight + generalScore.totalWeight + phraseTotalWeight;
-  const matchedWeight = requiredScore.matchedWeight + preferredScore.matchedWeight + generalScore.matchedWeight + phraseMatchedWeight;
+  const requiredSkillItems = [...jdRequiredSkills].map((s) => ({ key: s, weight: 1 }));
+  const skillCoverage = weightedCoverage(skillWeightItems, (s) => resumeSkills.has(s));
+  const requiredSkillCoverage = weightedCoverage(requiredSkillItems, (s) => resumeSkills.has(s));
 
-  const rawScore = totalWeight > 0 ? (matchedWeight / totalWeight) * 100 : 0;
-  const score = Math.max(0, Math.min(100, Math.round(rawScore)));
+  // Secondary text-overlap signals
+  const resumeTokens = tokenize(resumeText);
+  const resumeFreq = frequencyMap(resumeTokens);
+  const generalTokens = tokenize(zones.generalText || jdText);
+  const generalFreq = frequencyMap(generalTokens);
 
-  missing.sort((a, b) => b.weight - a.weight || b.freq - a.freq);
+  const overlapItems = [...generalFreq.entries()].map(([term, freq]) => ({
+    key: term,
+    weight: 1 + Math.log1p(freq)
+  }));
 
-  const requiredMissing = missing.filter((x) => x.zone === 'required').slice(0, 12).map((x) => x.term);
-  const requiredTotal = requiredFreq.size;
-  const requiredMatched = matched.filter((x) => x.zone === 'required').length;
+  const overlapCoverage = weightedCoverage(overlapItems, (term) => resumeFreq.has(term));
+
+  // Phrase coverage (small weight)
+  const phraseCandidates = [];
+  for (let i = 0; i < generalTokens.length - 1; i += 1) {
+    const phrase = `${generalTokens[i]} ${generalTokens[i + 1]}`;
+    if (phrase.length > 40) continue;
+    phraseCandidates.push(phrase);
+  }
+  const uniquePhrases = [...new Set(phraseCandidates)].slice(0, 60);
+  const phraseCoverage = uniquePhrases.length
+    ? (uniquePhrases.filter((p) => resumeLower.includes(p)).length / uniquePhrases.length) * 100
+    : null;
+
+  const sk = skillCoverage ?? 0;
+  const reqSk = requiredSkillCoverage ?? sk;
+  const ov = overlapCoverage ?? 0;
+  const phr = phraseCoverage ?? 0;
+
+  // Enterprise-style: skills dominate score.
+  let rawScore = reqSk * 0.48 + sk * 0.27 + ov * 0.2 + phr * 0.05;
+
+  // Gating to avoid inflated scores when required skills are missing.
+  if (requiredSkillCoverage !== null) {
+    if (requiredSkillCoverage < 30) rawScore *= 0.62;
+    else if (requiredSkillCoverage < 50) rawScore *= 0.78;
+  }
+
+  const score = Math.max(0, Math.min(100, round0(rawScore)));
+
+  const missingRequiredKeywords = [...jdRequiredSkills]
+    .filter((s) => !resumeSkills.has(s))
+    .slice(0, 20);
+
+  const matchedSkillKeywords = [...jdAllSkills]
+    .filter((s) => resumeSkills.has(s))
+    .slice(0, 30);
+
+  const missingSkillKeywords = [...jdAllSkills]
+    .filter((s) => !resumeSkills.has(s))
+    .slice(0, 25);
+
+  const missingTopKeywords = missingRequiredKeywords.length
+    ? missingRequiredKeywords
+    : missingSkillKeywords;
+
+  const overlapTerms = [...generalFreq.keys()].filter((term) => resumeFreq.has(term)).length;
+
+  const rubric = {
+    requiredCoverage: requiredSkillCoverage === null ? null : round0(requiredSkillCoverage),
+    skillCoverage: skillCoverage === null ? null : round0(skillCoverage),
+    generalCoverage: overlapCoverage === null ? null : round0(overlapCoverage),
+    preferredCoverage: null,
+    phraseCoverage: phraseCoverage === null ? null : round0(phraseCoverage)
+  };
+
+  const confidence =
+    jdAllSkills.size >= 8
+      ? 'high'
+      : jdAllSkills.size >= 4
+        ? 'medium'
+        : 'low';
 
   return {
     score,
-    missingTopKeywords: missing.slice(0, 15).map((x) => x.term),
-    missingRequiredKeywords: requiredMissing,
+    missingTopKeywords,
+    missingRequiredKeywords,
+    matchedSkillKeywords,
+    jdSkillKeywords: [...jdAllSkills].slice(0, 40),
+    jdRequiredSkillKeywords: [...jdRequiredSkills].slice(0, 25),
+    missingSkillKeywords,
+    rubric,
+    confidence,
     stats: {
-      jdUniqueTerms: new Set([...requiredFreq.keys(), ...preferredFreq.keys(), ...generalFreq.keys()]).size,
+      jdUniqueTerms: generalFreq.size,
       resumeUniqueTerms: resumeFreq.size,
-      overlapTerms: new Set(matched.map((x) => x.term)).size,
-      requiredCoverage: requiredTotal > 0 ? Math.round((requiredMatched / requiredTotal) * 100) : null
+      overlapTerms,
+      requiredCoverage: rubric.requiredCoverage
     }
   };
 }

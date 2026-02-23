@@ -36,8 +36,13 @@ const els = {
   resumeMeta: document.getElementById('resumeMeta'),
 
   thresholdInput: document.getElementById('thresholdInput'),
+  targetScoreInput: document.getElementById('targetScoreInput'),
   computeBtn: document.getElementById('computeBtn'),
+  rebuildToTargetBtn: document.getElementById('rebuildToTargetBtn'),
   scoreText: document.getElementById('scoreText'),
+  baseScoreText: document.getElementById('baseScoreText'),
+  tailoredScoreText: document.getElementById('tailoredScoreText'),
+  improvementText: document.getElementById('improvementText'),
   missingKeywords: document.getElementById('missingKeywords'),
 
   providerSelect: document.getElementById('providerSelect'),
@@ -48,6 +53,11 @@ const els = {
   tailorBtn: document.getElementById('tailorBtn'),
 
   tailoredText: document.getElementById('tailoredText'),
+  attemptSelect: document.getElementById('attemptSelect'),
+  viewAttemptBtn: document.getElementById('viewAttemptBtn'),
+  attemptStats: document.getElementById('attemptStats'),
+  showWhyBtn: document.getElementById('showWhyBtn'),
+  whyText: document.getElementById('whyText'),
   latexTemplateFile: document.getElementById('latexTemplateFile'),
   latexTemplateText: document.getElementById('latexTemplateText'),
   latexCompilerInput: document.getElementById('latexCompilerInput'),
@@ -85,7 +95,12 @@ const state = {
   baseResumeText: '',
   identityHints: [],
   generatedStructuredResume: null,
-  latestScore: null
+  latestScore: null,
+  latestBaseMatch: null,
+  latestTailoredMatch: null,
+  generationAttempts: [],
+  bestAttemptIndex: -1,
+  lastJdText: ''
 };
 
 function setStatus(message, isError = false) {
@@ -137,6 +152,51 @@ function extractIdentityHints(text) {
   return [...new Set(hints.filter(Boolean))].slice(0, 20);
 }
 
+function buildKeywordGuidance(jdText, baseResumeText, matchResult) {
+  const jdLower = normalizeText(jdText);
+  const resumeLower = normalizeText(baseResumeText);
+
+  const phraseCandidates = [
+    'data ingestion',
+    'distributed systems',
+    'real-time',
+    'streaming',
+    'fault tolerance',
+    'scalability',
+    'query optimization',
+    'data validation',
+    'error handling',
+    'self-healing',
+    'api integration',
+    'monitoring',
+    'alerting',
+    'cloud platforms',
+    'microservices',
+    'event-driven',
+    'batch processing'
+  ];
+
+  const phraseHits = phraseCandidates.filter((p) => jdLower.includes(p)).slice(0, 12);
+  const resumeBackedPhrases = phraseHits.filter((p) => resumeLower.includes(p));
+
+  const skillsSectionKeywords = (matchResult.matchedSkillKeywords || []).slice(0, 14);
+  const experienceKeywords = [...new Set([
+    ...(matchResult.jdRequiredSkillKeywords || []).slice(0, 8),
+    ...resumeBackedPhrases.slice(0, 6)
+  ])];
+  const projectKeywords = [...new Set([
+    ...(matchResult.matchedSkillKeywords || []).slice(0, 8),
+    ...resumeBackedPhrases.slice(0, 5)
+  ])];
+
+  return {
+    skillsSectionKeywords,
+    experienceKeywords,
+    projectKeywords,
+    missingRequiredKeywords: (matchResult.missingRequiredKeywords || []).slice(0, 12)
+  };
+}
+
 function renderMissingKeywords(items) {
   els.missingKeywords.innerHTML = '';
   if (!items?.length) return;
@@ -146,6 +206,98 @@ function renderMissingKeywords(items) {
     span.className = 'pill';
     span.textContent = keyword;
     els.missingKeywords.appendChild(span);
+  }
+}
+
+function extractYearsFromText(text) {
+  const matches = [...(text || '').matchAll(/(\d+)\s*(?:\+|plus)?\s*years?/gi)];
+  if (!matches.length) return null;
+  return Math.max(...matches.map((m) => Number(m[1]) || 0));
+}
+
+function buildEnhancementReasons({ jdText, baseMatch, bestMatch, baseResumeText }) {
+  const reasons = [];
+  const target = 85;
+
+  if (!bestMatch) {
+    reasons.push('- No tailored resume match result available.');
+    return reasons.join('\n');
+  }
+
+  if (bestMatch.score >= target) {
+    reasons.push(`- Best score is ${bestMatch.score}%, already >= ${target}%.`);
+    return reasons.join('\n');
+  }
+
+  reasons.push(`- Best score after 5 attempts is ${bestMatch.score}% (< ${target}%).`);
+
+  if (typeof bestMatch?.rubric?.requiredCoverage === 'number' && bestMatch.rubric.requiredCoverage < 70) {
+    reasons.push(`- Required JD skill coverage is low (${bestMatch.rubric.requiredCoverage}%).`);
+  }
+  if (typeof bestMatch?.rubric?.skillCoverage === 'number' && bestMatch.rubric.skillCoverage < 75) {
+    reasons.push(`- Overall skill coverage is low (${bestMatch.rubric.skillCoverage}%).`);
+  }
+  if ((bestMatch.missingRequiredKeywords || []).length) {
+    reasons.push(`- Missing required skill keywords: ${(bestMatch.missingRequiredKeywords || []).slice(0, 10).join(', ')}.`);
+  }
+
+  const jdYears = extractYearsFromText(jdText);
+  const resumeYears = extractYearsFromText(baseResumeText);
+  if (jdYears && resumeYears && resumeYears < jdYears) {
+    reasons.push(`- Possible experience gap: JD asks ~${jdYears}+ years, resume indicates ~${resumeYears}+ years.`);
+  } else if (jdYears && !resumeYears) {
+    reasons.push(`- JD mentions ~${jdYears}+ years but resume does not clearly state years of experience.`);
+  }
+
+  if (bestMatch.confidence === 'low') {
+    reasons.push('- JD parsing confidence is low; JD may be noisy or mixed with non-JD text.');
+  }
+
+  if (baseMatch && bestMatch.score - baseMatch.score <= 0) {
+    reasons.push('- Tailoring did not improve score over base resume; current resume facts may not support missing JD skills.');
+  }
+
+  reasons.push('- Improvement options: add verified projects/bullets that contain missing required skills, quantify relevant outcomes, and ensure years/role alignment is explicit.');
+  return reasons.join('\n');
+}
+
+function renderAttemptOptions() {
+  if (!els.attemptSelect) return;
+  els.attemptSelect.innerHTML = '';
+
+  if (!state.generationAttempts.length) {
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = 'No attempts yet';
+    els.attemptSelect.appendChild(opt);
+    if (els.attemptStats) els.attemptStats.textContent = 'Attempts: N/A';
+    return;
+  }
+
+  state.generationAttempts.forEach((attempt, idx) => {
+    const opt = document.createElement('option');
+    opt.value = String(idx);
+    const marker = idx === state.bestAttemptIndex ? ' (Best)' : '';
+    opt.textContent = `Attempt ${attempt.attempt}: ${attempt.score}/100${marker}`;
+    els.attemptSelect.appendChild(opt);
+  });
+
+  if (state.bestAttemptIndex >= 0) {
+    els.attemptSelect.value = String(state.bestAttemptIndex);
+  }
+
+  const best = state.generationAttempts[state.bestAttemptIndex];
+  if (els.attemptStats && best) {
+    els.attemptStats.textContent = `Attempts: ${state.generationAttempts.length}/5 | Best: Attempt ${best.attempt} (${best.score}/100)`;
+  }
+}
+
+function showAttempt(index) {
+  const attempt = state.generationAttempts[index];
+  if (!attempt) return;
+  els.tailoredText.value = attempt.text;
+  if (state.latestBaseMatch) {
+    renderMatchSummary(state.latestBaseMatch, attempt.match);
   }
 }
 
@@ -267,6 +419,7 @@ async function saveSettings() {
 
   await setPersistent({
     threshold: Number(els.thresholdInput.value || 70),
+    targetScore: Number(els.targetScoreInput.value || 90),
     selectedProvider: els.providerSelect.value,
     llmProfiles: state.llmProfiles,
     resumeSourceMode: els.resumeSourceMode.value,
@@ -284,6 +437,7 @@ async function saveSettings() {
 async function loadSettings() {
   const data = await getPersistent([
     'threshold',
+    'targetScore',
     'selectedProvider',
     'llmProfiles',
     'resumeSourceMode',
@@ -298,6 +452,7 @@ async function loadSettings() {
   ]);
 
   if (typeof data.threshold === 'number') els.thresholdInput.value = String(data.threshold);
+  if (typeof data.targetScore === 'number') els.targetScoreInput.value = String(data.targetScore);
   if (data.resumeSourceMode) els.resumeSourceMode.value = data.resumeSourceMode;
   if (data.resumeLatexText) els.resumeLatexText.value = data.resumeLatexText;
   if (data.resumeSimpleText) els.resumeSimpleText.value = data.resumeSimpleText;
@@ -329,30 +484,74 @@ async function handleExtract(type) {
   if (!response?.ok) throw new Error(response?.error || 'JD extraction failed');
 
   els.jdText.value = response.text || '';
+  state.latestBaseMatch = null;
+  state.latestTailoredMatch = null;
   setStatus(`JD captured (${response.meta?.strategy || response.meta?.mode || 'auto'}).`);
 }
 
-function runMatch() {
+function runMatchForResume(resumeText) {
   const jdText = normalizeText(els.jdText.value);
   if (!jdText) throw new Error('JD text is empty');
-  if (!state.baseResumeText) throw new Error('Prepare resume source first');
+  if (!resumeText) throw new Error('Resume text is empty');
 
-  const result = computeMatch(jdText, state.baseResumeText);
-  state.latestScore = result.score;
+  return computeMatch(jdText, resumeText);
+}
 
-  const requiredCoverage = typeof result.stats.requiredCoverage === 'number'
-    ? ` | Required coverage: ${result.stats.requiredCoverage}%`
+function renderMatchSummary(baseResult, tailoredResult = null) {
+  const requiredCoverage = typeof baseResult?.rubric?.requiredCoverage === 'number'
+    ? ` | Req: ${baseResult.rubric.requiredCoverage}%`
     : '';
+  const skillCoverage = typeof baseResult?.rubric?.skillCoverage === 'number'
+    ? ` | Skills: ${baseResult.rubric.skillCoverage}%`
+    : '';
+  const confidence = baseResult?.confidence ? ` | Confidence: ${baseResult.confidence}` : '';
 
-  els.scoreText.textContent = `Score: ${result.score}/100 | Overlap terms: ${result.stats.overlapTerms}${requiredCoverage}`;
-  renderMissingKeywords(result.missingRequiredKeywords?.length ? result.missingRequiredKeywords : result.missingTopKeywords);
-  return result;
+  if (!tailoredResult) {
+    els.scoreText.textContent =
+      `Base Score: ${baseResult.score}/100 | Overlap: ${baseResult.stats.overlapTerms}${requiredCoverage}${skillCoverage}${confidence}`;
+    if (els.baseScoreText) els.baseScoreText.textContent = `Base score: ${baseResult.score}/100`;
+    if (els.tailoredScoreText) els.tailoredScoreText.textContent = 'Latest tailored score: N/A';
+    if (els.improvementText) els.improvementText.textContent = 'Improvement: N/A';
+    renderMissingKeywords(
+      baseResult.missingRequiredKeywords?.length
+        ? baseResult.missingRequiredKeywords
+        : (baseResult.missingSkillKeywords?.length ? baseResult.missingSkillKeywords : baseResult.missingTopKeywords)
+    );
+    return;
+  }
+
+  const lift = tailoredResult.score - baseResult.score;
+  const liftSign = lift >= 0 ? '+' : '';
+  const tailoredReq = typeof tailoredResult?.rubric?.requiredCoverage === 'number'
+    ? ` | Tailored Req: ${tailoredResult.rubric.requiredCoverage}%`
+    : '';
+  els.scoreText.textContent =
+    `Base: ${baseResult.score}/100 | Tailored: ${tailoredResult.score}/100 | Lift: ${liftSign}${lift}${tailoredReq}`;
+  if (els.baseScoreText) els.baseScoreText.textContent = `Base score: ${baseResult.score}/100`;
+  if (els.tailoredScoreText) els.tailoredScoreText.textContent = `Latest tailored score: ${tailoredResult.score}/100`;
+  if (els.improvementText) els.improvementText.textContent = `Improvement: ${liftSign}${lift}`;
+  renderMissingKeywords(
+    tailoredResult.missingRequiredKeywords?.length
+      ? tailoredResult.missingRequiredKeywords
+      : (tailoredResult.missingSkillKeywords?.length ? tailoredResult.missingSkillKeywords : tailoredResult.missingTopKeywords)
+  );
+}
+
+function runMatch() {
+  if (!state.baseResumeText) throw new Error('Prepare resume source first');
+  const baseResult = runMatchForResume(state.baseResumeText);
+  state.latestScore = baseResult.score;
+  state.latestBaseMatch = baseResult;
+  renderMatchSummary(baseResult, state.latestTailoredMatch);
+  return baseResult;
 }
 
 async function prepareResumeSource() {
   const preparedText = getPreparedResumeText();
   state.baseResumeText = preparedText;
   state.identityHints = extractIdentityHints(preparedText);
+  state.latestBaseMatch = null;
+  state.latestTailoredMatch = null;
   els.resumeMeta.textContent = `Prepared resume source (${preparedText.length} chars).`;
   await saveSettings();
   setStatus('Resume source prepared for matching and tailoring.');
@@ -368,28 +567,94 @@ async function generateTailoredResume() {
   if (!apiKey) throw new Error(`API key is required for ${PROVIDERS[providerId].label}`);
 
   const matchResult = runMatch();
+  const targetScore = Number(els.targetScoreInput.value || 90);
+  const maxAttempts = 5;
+  const keywordGuidance = buildKeywordGuidance(jdText, state.baseResumeText, matchResult);
   await saveSettings();
   setStatus(`Generating tailored resume with ${PROVIDERS[providerId].label}...`);
 
-  const structured = await generateTailoredResumeStructured({
-    endpoint,
-    apiKey,
-    model,
-    jdText,
-    baseResumeText: state.baseResumeText,
-    matchInsights: {
-      score: matchResult.score,
-      missingTopKeywords: matchResult.missingTopKeywords,
-      missingRequiredKeywords: matchResult.missingRequiredKeywords
-    },
-    identityHints: state.identityHints,
-    temperature: 0.2
-  });
+  state.lastJdText = jdText;
+  state.generationAttempts = [];
+  let bestStructured = null;
+  let bestMatch = null;
+  let bestText = '';
+  let bestIndex = -1;
 
-  state.generatedStructuredResume = structured;
-  els.tailoredText.value = structuredResumeToPlainText(structured);
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const guidanceSource = bestMatch || matchResult;
+    const attemptGuidance = attempt === 1
+      ? keywordGuidance
+      : buildKeywordGuidance(jdText, state.baseResumeText, guidanceSource);
+
+    setStatus(`Generating attempt ${attempt}/${maxAttempts}... target ${targetScore}%`);
+
+    const structured = await generateTailoredResumeStructured({
+      endpoint,
+      apiKey,
+      model,
+      jdText,
+      baseResumeText: state.baseResumeText,
+      matchInsights: {
+        score: guidanceSource.score,
+        missingTopKeywords: guidanceSource.missingTopKeywords,
+        missingRequiredKeywords: guidanceSource.missingRequiredKeywords
+      },
+      keywordGuidance: attemptGuidance,
+      identityHints: state.identityHints,
+      temperature: attempt === 1 ? 0.2 : 0.12
+    });
+
+    const attemptText = structuredResumeToPlainText(structured);
+    const attemptMatch = runMatchForResume(attemptText);
+    const attemptItem = {
+      attempt,
+      structured,
+      text: attemptText,
+      match: attemptMatch,
+      score: attemptMatch.score
+    };
+    state.generationAttempts.push(attemptItem);
+
+    if (!bestMatch || attemptMatch.score > bestMatch.score) {
+      bestStructured = structured;
+      bestMatch = attemptMatch;
+      bestText = attemptText;
+      bestIndex = state.generationAttempts.length - 1;
+    }
+
+    renderAttemptOptions();
+
+    if (attemptMatch.score >= targetScore && attempt >= 2) {
+      // still complete all 5 attempts as requested; keep generating for best pick
+    }
+  }
+
+  state.generatedStructuredResume = bestStructured;
+  state.latestTailoredMatch = bestMatch;
+  state.bestAttemptIndex = bestIndex;
+  els.tailoredText.value = bestText;
+  renderMatchSummary(state.latestBaseMatch || matchResult, state.latestTailoredMatch);
+  renderAttemptOptions();
+
+  const why = buildEnhancementReasons({
+    jdText: state.lastJdText,
+    baseMatch: state.latestBaseMatch,
+    bestMatch: state.latestTailoredMatch,
+    baseResumeText: state.baseResumeText
+  });
+  if (els.whyText) {
+    els.whyText.value = why;
+    els.whyText.classList.toggle('hidden', state.latestTailoredMatch.score >= 85);
+  }
+
   await saveSettings();
-  setStatus('Tailored resume generated. Download PDF when ready.');
+  const lift = (state.latestTailoredMatch?.score || 0) - matchResult.score;
+  const reached = (state.latestTailoredMatch?.score || 0) >= targetScore;
+  setStatus(
+    reached
+      ? `Tailored resume generated. Target reached (${state.latestTailoredMatch.score}%). Lift: ${lift >= 0 ? '+' : ''}${lift}.`
+      : `Best tailored resume generated (${state.latestTailoredMatch.score}%). Lift: ${lift >= 0 ? '+' : ''}${lift}.`
+  );
 }
 
 async function downloadPdf() {
@@ -424,6 +689,7 @@ async function downloadTex() {
 
 async function init() {
   await loadSettings();
+  renderAttemptOptions();
   setStatus('Ready.');
 }
 
@@ -500,6 +766,7 @@ for (const input of [
   els.endpointInput,
   els.apiKeyInput,
   els.thresholdInput,
+  els.targetScoreInput,
   els.resumeLatexText,
   els.resumeSimpleText,
   els.latexCompilerInput,
@@ -509,6 +776,31 @@ for (const input of [
     saveSettings().catch((err) => setStatus(err.message || String(err), true));
   });
 }
+
+els.rebuildToTargetBtn?.addEventListener('click', async () => {
+  try {
+    await generateTailoredResume();
+  } catch (err) {
+    setStatus(err.message || String(err), true);
+  }
+});
+
+els.viewAttemptBtn?.addEventListener('click', () => {
+  const idx = Number(els.attemptSelect?.value);
+  if (Number.isNaN(idx)) return;
+  showAttempt(idx);
+});
+
+els.attemptSelect?.addEventListener('change', () => {
+  const idx = Number(els.attemptSelect?.value);
+  if (Number.isNaN(idx)) return;
+  showAttempt(idx);
+});
+
+els.showWhyBtn?.addEventListener('click', () => {
+  if (!els.whyText) return;
+  els.whyText.classList.toggle('hidden');
+});
 
 els.tailorBtn.addEventListener('click', async () => {
   try {

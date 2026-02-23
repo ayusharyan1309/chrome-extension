@@ -148,7 +148,14 @@
           <input id="thresholdInput" type="number" min="1" max="100" value="70" />
           <button id="computeBtn">Compute Match</button>
         </div>
+        <div class="row" style="margin-top:8px;">
+          <input id="targetScoreInput" type="number" min="1" max="100" value="90" />
+          <button id="rebuildToTargetBtn">Rebuild To Target</button>
+        </div>
         <div id="scoreText" class="status">Score: N/A</div>
+        <div id="baseScoreText" class="status">Base score: N/A</div>
+        <div id="tailoredScoreText" class="status">Latest tailored score: N/A</div>
+        <div id="improvementText" class="status">Improvement: N/A</div>
         <div id="missingKeywords"></div>
       </div>
 
@@ -172,6 +179,13 @@
       <div class="card">
         <h2>Output</h2>
         <textarea id="tailoredText" placeholder="Generated resume preview"></textarea>
+        <div class="row" style="margin-top:8px;">
+          <select id="attemptSelect"></select>
+          <button id="viewAttemptBtn">View Attempt</button>
+        </div>
+        <div id="attemptStats" class="status">Attempts: N/A</div>
+        <button id="showWhyBtn">Why score < 85?</button>
+        <textarea id="whyText" class="hidden" placeholder="Improvement reasons will appear here"></textarea>
 
         <h2 style="margin-top:10px;">Optional Custom LaTeX Template</h2>
         <input id="latexTemplateFile" type="file" accept=".tex,text/x-tex,text/plain" />

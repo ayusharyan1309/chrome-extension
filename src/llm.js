@@ -186,6 +186,7 @@ export async function generateTailoredResumeStructured({
   jdText,
   baseResumeText,
   matchInsights = null,
+  keywordGuidance = null,
   identityHints = [],
   temperature = 0.2
 }) {
@@ -200,6 +201,17 @@ export async function generateTailoredResumeStructured({
         `Missing top keywords: ${(matchInsights.missingTopKeywords || []).join(', ') || 'none'}`
       ].join('\n')
     : 'No match insights available';
+
+  const keywordGuidanceText = keywordGuidance
+    ? [
+        'Keyword Placement Guidance (use only if factual in base resume):',
+        `- Skills section priority: ${(keywordGuidance.skillsSectionKeywords || []).join(', ') || 'none'}`,
+        `- Experience bullet focus: ${(keywordGuidance.experienceKeywords || []).join(', ') || 'none'}`,
+        `- Project bullet focus: ${(keywordGuidance.projectKeywords || []).join(', ') || 'none'}`,
+        `- Required JD keywords still missing: ${(keywordGuidance.missingRequiredKeywords || []).join(', ') || 'none'}`,
+        '- Rule: If a missing required keyword is not supported by base resume facts, do NOT add it.'
+      ].join('\n')
+    : 'Keyword Placement Guidance: not available';
 
   const identityHintText = identityHints.filter(Boolean).join(' | ') || 'Not detected';
 
@@ -247,6 +259,8 @@ export async function generateTailoredResumeStructured({
     '',
     'Identity hints from resume:',
     identityHintText,
+    '',
+    keywordGuidanceText,
     '',
     'Match Insights:',
     insights,
